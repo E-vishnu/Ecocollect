@@ -1,0 +1,11 @@
+{
+  "name": "Remix EcoCollect",
+  "description": "Smart multi-waste collection, segregation, and responsible recycling platform supporting organic, plastic, paper, glass, metal, e-waste, textile, and hazardous waste with dynamic pricing, IoT scale telemetry, and AI verification.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
