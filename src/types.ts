@@ -12,7 +12,8 @@ export type WasteCategory =
   | 'textile'
   | 'hazardous'
   | 'other_recyclable'
-  | 'mixed';
+  | 'mixed'
+  | 'not_waste_or_unclear';
 
 export type PickupType = 'routine' | 'bulk' | 'commercial' | 'e_waste_special' | 'off_schedule';
 

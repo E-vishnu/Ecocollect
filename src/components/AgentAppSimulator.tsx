@@ -33,6 +33,7 @@ import {
 import { Pickup, WasteCategory, WeightSource, User } from '../types';
 import { SAMPLE_WASTE_PHOTOS, calculateDynamicPricing, WASTE_CATEGORIES_REGISTRY } from '../data/pricingConstants';
 import { useLanguage } from '../i18n/LanguageContext';
+import { WasteCameraModal } from './WasteCameraModal';
 
 interface AgentAppSimulatorProps {
   pickups: Pickup[];
@@ -86,6 +87,7 @@ export const AgentAppSimulator: React.FC<AgentAppSimulatorProps> = ({
     mismatch: false,
     photoUrl: SAMPLE_WASTE_PHOTOS[0].url
   });
+  const [isAgentCameraOpen, setIsAgentCameraOpen] = useState(false);
 
   const selectedPickup = pickups.find(p => p.id === selectedPickupId);
 
@@ -128,6 +130,21 @@ export const AgentAppSimulator: React.FC<AgentAppSimulatorProps> = ({
       });
       setIsClassifying(false);
     }, 600);
+  };
+
+  const handleApplyAgentCamera = (category: WasteCategory, details: {
+    detectedItem: string;
+    estimatedWeightKg: number;
+    photoUrl?: string;
+    condition?: string;
+  }) => {
+    const isMismatch = selectedPickup ? (category !== selectedPickup.category) : false;
+    setClassifiedData({
+      category: category,
+      confidence: 0.96,
+      mismatch: isMismatch,
+      photoUrl: details.photoUrl || classifiedData.photoUrl
+    });
   };
 
   const handleFinalSubmit = () => {
@@ -894,11 +911,22 @@ export const AgentAppSimulator: React.FC<AgentAppSimulatorProps> = ({
               </p>
             </div>
 
-            {/* Sample Capture Presets */}
+            {/* Sample Capture Presets & Real Camera Scan */}
             <div className="space-y-2">
-              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
-                {t('agent.capturePhotoPreset', 'Simulate Camera Capture / Photo Preset:')}
-              </span>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                  {t('agent.capturePhotoPreset', 'Capture Waste Photo for AI Verification:')}
+                </span>
+                <button
+                  id="agent-camera-scan-btn"
+                  type="button"
+                  onClick={() => setIsAgentCameraOpen(true)}
+                  className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                  <span>Scan Real Waste (Rear Camera)</span>
+                </button>
+              </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {SAMPLE_WASTE_PHOTOS.map((preset, idx) => (
                   <div
@@ -1217,6 +1245,14 @@ export const AgentAppSimulator: React.FC<AgentAppSimulatorProps> = ({
         )}
 
       </div>
+
+      {/* AI Waste Camera Scanner Modal for Collection Agents */}
+      <WasteCameraModal
+        isOpen={isAgentCameraOpen}
+        onClose={() => setIsAgentCameraOpen(false)}
+        onApplyCategory={handleApplyAgentCamera}
+        initialCategory={selectedPickup?.category || 'plastic'}
+      />
 
     </div>
   );

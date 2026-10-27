@@ -418,6 +418,20 @@ export const WASTE_CATEGORIES_REGISTRY: WasteCategoryConfig[] = [
         placeholder: 'e.g. 3.0'
       }
     ]
+  },
+  {
+    id: 'not_waste_or_unclear',
+    name: 'Not Waste / Unclear Image',
+    tagline: 'Item is not discarded waste (e.g., active device, room, person) or image is blurry/dark',
+    badgeClass: 'bg-rose-500/10 text-rose-700 border-rose-500/30',
+    colorHex: '#f43f5e',
+    iconName: 'AlertCircle',
+    baseProcessingRate: 0.0,
+    buybackRate: 0.0,
+    recyclingFacility: 'Not Applicable',
+    environmentalBenefit: 'Prevents non-waste items or unclear submissions from misallocation.',
+    acceptedItems: [],
+    fieldDefinitions: []
   }
 ];
 
@@ -434,7 +448,8 @@ export const BASE_PROCESSING_RATES: Record<WasteCategory, number> = {
   textile: 2.5,
   hazardous: 12.0,
   other_recyclable: 3.0,
-  mixed: 12.0
+  mixed: 12.0,
+  not_waste_or_unclear: 0.0
 };
 
 // Vj: Recyclable buyback resale payout per KG in INR
@@ -450,7 +465,8 @@ export const RECYCLABLE_BUYBACK_RATES: Record<WasteCategory, number> = {
   biodegradable: 0.0,
   hazardous: 0.0,
   other_recyclable: 6.0,
-  mixed: 0.0
+  mixed: 0.0,
+  not_waste_or_unclear: 0.0
 };
 
 // F: Fixed surcharge based on pickup type in INR

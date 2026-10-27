@@ -99,28 +99,48 @@ export const apiService = {
   }): Promise<{
     success: boolean;
     source: string;
-    analysis: {
+    isRealAi?: boolean;
+    isEstimate?: boolean;
+    error?: string;
+    analysis?: {
+      mainObjectDescription?: string;
+      materialDescription?: string;
       detectedItem: string;
       category: WasteCategory;
       condition: string;
       confidence: number;
+      topGuesses?: Array<{ category: WasteCategory; confidence: number }>;
       estimatedWeightKg: number;
+      isRecyclable?: boolean;
       recyclabilityGrade: string;
       disposalGuideline: string;
       declaredMatch: boolean;
     };
-  } | null> {
+  }> {
     try {
       const res = await fetch('/api/verification/ai-analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      if (!res.ok) throw new Error('AI analysis call failed');
-      return await res.json();
-    } catch (e) {
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data || !data.success) {
+        return {
+          success: false,
+          source: data?.source || 'Unavailable',
+          isRealAi: false,
+          error: data?.error || 'AI unavailable. Please choose the category manually and let the agent verify.'
+        };
+      }
+      return data;
+    } catch (e: any) {
       console.warn('API analyzeWasteWithAI error:', e);
-      return null;
+      return {
+        success: false,
+        source: 'Unavailable',
+        isRealAi: false,
+        error: 'AI unavailable. Please choose the category manually and let the agent verify.'
+      };
     }
   },
 

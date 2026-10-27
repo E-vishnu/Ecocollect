@@ -2,7 +2,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 
 import { 
@@ -46,12 +46,19 @@ function sanitizeUser(user: User): Omit<User, 'passwordHash'> {
   return rest;
 }
 
-// AI Client helper (lazy initialized)
+// AI Client helper (lazy initialized with aistudio-build header)
 let aiClient: GoogleGenAI | null = null;
 function getAI(): GoogleGenAI | null {
   if (!aiClient && process.env.GEMINI_API_KEY) {
     try {
-      aiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      aiClient = new GoogleGenAI({
+        apiKey: process.env.GEMINI_API_KEY,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build'
+          }
+        }
+      });
     } catch (e) {
       console.warn('Failed to initialize GoogleGenAI client:', e);
     }
@@ -551,83 +558,258 @@ async function startServer() {
     try {
       const { imageBase64, imageUrl, declaredCategory } = req.body;
 
-      const ai = getAI();
-
-      // If Gemini API is available and image provided, run multimodal analysis
-      if (ai && (imageBase64 || imageUrl)) {
-        try {
-          const contents: any[] = [];
-          if (imageBase64) {
-            // Strip data URL header if present
-            const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
-            contents.push({
-              inlineData: {
-                data: cleanBase64,
-                mimeType: 'image/jpeg'
-              }
-            });
-          }
-
-          contents.push({
-            text: `You are EcoCollect's smart waste AI classifier. Analyze this waste item image carefully.
-Return ONLY valid JSON matching this exact structure:
-{
-  "detectedItem": "Specific item name (e.g., Clean PET water bottle, Corrugated packaging box, Smartphone circuit board, Aluminum beverage can)",
-  "category": "one of: organic, plastic, paper_cardboard, glass, metal, e_waste, textile, hazardous, other_recyclable",
-  "condition": "e.g., Clean & Dry, Soiled, Broken, Working, Scrapped",
-  "confidence": 0.95 (number between 0.50 and 0.99),
-  "estimatedWeightKg": 1.5 (approximate weight in kg),
-  "recyclabilityGrade": "High / Medium / Hazardous",
-  "disposalGuideline": "Short 1-sentence recommended segregation action",
-  "declaredMatch": true or false (matches declaredCategory "${declaredCategory || 'plastic'}")
-}`
-          });
-
-          const response = await ai.models.generateContent({
-            model: 'gemini-3.8-flash',
-            contents,
-            config: {
-              responseMimeType: 'application/json'
-            }
-          });
-
-          if (response.text) {
-            const parsed = JSON.parse(response.text);
-            return res.json({
-              success: true,
-              source: 'gemini-3.8-flash',
-              isEstimate: true,
-              analysis: parsed
-            });
-          }
-        } catch (geminiErr) {
-          console.warn('Gemini vision analysis failed, falling back to intelligent classifier:', geminiErr);
-        }
+      if (!imageBase64 && !imageUrl) {
+        return res.status(400).json({
+          success: false,
+          source: 'Unavailable',
+          isRealAi: false,
+          error: 'No image provided for waste analysis.'
+        });
       }
 
-      // Intelligent Heuristic Classifier Fallback across ALL categories
-      const targetCategory = (declaredCategory || 'plastic') as WasteCategory;
-      const categoryConfig = WASTE_CATEGORIES_REGISTRY.find(c => c.id === targetCategory) || WASTE_CATEGORIES_REGISTRY[1];
-      
-      const sampleItemName = categoryConfig.acceptedItems[0] || 'Recyclable material';
+      const ai = getAI();
 
-      res.json({
-        success: true,
-        source: 'ecocollect-vision-engine',
-        isEstimate: true,
-        analysis: {
-          detectedItem: sampleItemName,
-          category: targetCategory,
-          condition: 'Clean & segregated',
-          confidence: 0.94,
-          estimatedWeightKg: targetCategory === 'paper_cardboard' ? 5.2 : targetCategory === 'metal' ? 3.2 : 2.5,
-          recyclabilityGrade: targetCategory === 'hazardous' ? 'Hazardous Treatment' : 'High Recyclability',
-          disposalGuideline: `Route to ${categoryConfig.recyclingFacility}`,
-          declaredMatch: true
+      // If Gemini API is not configured or client failed to initialize, return error state immediately (NO guessing or fake fallback)
+      if (!ai || !process.env.GEMINI_API_KEY) {
+        return res.status(503).json({
+          success: false,
+          source: 'Unavailable',
+          isRealAi: false,
+          error: 'AI unavailable. Please choose the category manually and let the agent verify.'
+        });
+      }
+
+      const contents: any[] = [];
+      if (imageBase64) {
+        // Extract mime type and clean base64 data
+        const mimeMatch = imageBase64.match(/^data:(image\/[a-zA-Z0-9.+_-]+);base64,(.+)$/);
+        const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+        const cleanBase64 = mimeMatch ? mimeMatch[2] : imageBase64.replace(/^data:[^;]+;base64,/, '');
+
+        contents.push({
+          inlineData: {
+            data: cleanBase64,
+            mimeType: mimeType
+          }
+        });
+      }
+
+      const cleanDeclared = declaredCategory ? String(declaredCategory).replace(/["\\]/g, '').trim() : '';
+
+      contents.push({
+        text: `You are EcoCollect's strict AI visual waste inspector.
+Analyze this image carefully and objectively.
+
+ALLOWED CATEGORIES AND DEFINITIONS:
+- organic: food scraps, peels, garden waste
+- plastic: bottles, bags, containers, wrappers
+- paper_cardboard: newspapers, boxes, books
+- glass: bottles, jars
+- metal: cans, utensils, scrap
+- e_waste: phones, chargers, laptops, batteries, cables
+- textile: clothes, bags, shoes, fabric
+- hazardous: paint, chemicals, medicines, sprays
+- not_waste_or_unclear: people, rooms, screens, blurry or dark images
+
+CRITICAL CLASSIFICATION INSTRUCTIONS:
+1. FIRST, describe the main visible object in detail (what is it?) and identify its material composition (what is it made of?) in "mainObjectDescription" and "materialDescription".
+2. THEN, choose the category based strictly on that visual description. Use ONLY what is visible in the image.
+3. The category MUST ONLY be one of the allowed categories: organic, plastic, paper_cardboard, glass, metal, e_waste, textile, hazardous, not_waste_or_unclear.
+4. Return the top 2 category guesses in "topGuesses" with a confidence score (between 0.00 and 1.00) for each. Rank the most likely guess first.
+5. CONFIDENCE RULES:
+   - Set confidence below 0.60 whenever you are unsure, if lighting is poor, if the item is partially hidden, or if materials are ambiguous.
+   - NEVER default to a high confidence. High confidence (>= 0.70) is ONLY allowed when the item is unmistakably clear, well-lit, fully visible, and unquestionably identified.
+6. SPECIAL RULES FOR "not_waste_or_unclear":
+   - Return "not_waste_or_unclear" whenever the image shows a working device (e.g. laptop, desktop screen, phone screen, tablet in use, keyboard/mouse on a desk), a person, face, room, living space, pet, or anything that is not discarded waste/scrap material.
+   - If a working electronic device is shown (e.g., active laptop, desktop screen, or mobile phone), state this clearly in "detectedItem" (e.g., "Laptop (working electronic device, not waste)", "Smartphone screen (working device, not waste)").
+   - Also return "not_waste_or_unclear" if the photo is blurry, excessively dark, obstructed, or unidentifiable as waste.
+7. The user declared: "${cleanDeclared || 'none'}". Do NOT let this influence your identification. Determine your answer strictly from visible evidence first, and only afterward compare against it to set "declaredMatch".`
+      });
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents,
+        config: {
+          temperature: 0.1,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              mainObjectDescription: {
+                type: Type.STRING,
+                description: 'Detailed description of the main visible object in the image.'
+              },
+              materialDescription: {
+                type: Type.STRING,
+                description: 'Identified material composition of the object from visual evidence.'
+              },
+              detectedItem: {
+                type: Type.STRING,
+                description: 'Specific name of the object. If working electronic device, state that clearly.'
+              },
+              topGuesses: {
+                type: Type.ARRAY,
+                description: 'The top 2 category guesses ranked by confidence.',
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    category: {
+                      type: Type.STRING,
+                      description: 'Must be one of: organic, plastic, paper_cardboard, glass, metal, e_waste, textile, hazardous, not_waste_or_unclear'
+                    },
+                    confidence: {
+                      type: Type.NUMBER,
+                      description: 'Confidence score between 0.00 and 1.00 for this category.'
+                    }
+                  },
+                  required: ['category', 'confidence']
+                }
+              },
+              condition: {
+                type: Type.STRING,
+                description: 'Physical condition (e.g. Clean & dry, Soiled, Scrap, Broken, Working device, Blurry/Dark).'
+              },
+              estimatedWeightKg: {
+                type: Type.NUMBER,
+                description: 'Estimated weight in kg (0 for not_waste_or_unclear).'
+              },
+              recyclabilityGrade: {
+                type: Type.STRING,
+                description: 'Grade A, Grade B, Grade C, Non-Recyclable, or N/A.'
+              },
+              disposalGuideline: {
+                type: Type.STRING,
+                description: '1-2 sentence guideline for proper segregation or disposal.'
+              },
+              declaredMatch: {
+                type: Type.BOOLEAN,
+                description: 'Whether the top identified category matches the user declared category.'
+              }
+            },
+            required: [
+              'mainObjectDescription',
+              'materialDescription',
+              'detectedItem',
+              'topGuesses',
+              'condition',
+              'estimatedWeightKg',
+              'recyclabilityGrade',
+              'disposalGuideline',
+              'declaredMatch'
+            ]
+          }
         }
       });
-    } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message || 'AI analysis failed' });
+
+      if (!response.text) {
+        throw new Error('Empty response from AI vision service');
+      }
+
+      const parsed = JSON.parse(response.text);
+
+      // Allowed categories only
+      const validCategories: WasteCategory[] = [
+        'organic',
+        'plastic',
+        'paper_cardboard',
+        'glass',
+        'metal',
+        'e_waste',
+        'textile',
+        'hazardous',
+        'not_waste_or_unclear'
+      ];
+
+      // Sanitize topGuesses (ensure top 2 distinct guesses with valid categories and [0,1] confidence)
+      const rawGuesses = Array.isArray(parsed.topGuesses) ? parsed.topGuesses : [];
+      const sanitizedGuesses: Array<{ category: WasteCategory; confidence: number }> = [];
+
+      for (const g of rawGuesses) {
+        if (sanitizedGuesses.length >= 2) break;
+        let cat = String(g?.category || '').toLowerCase().trim();
+        if (!validCategories.includes(cat as WasteCategory)) {
+          cat = 'not_waste_or_unclear';
+        }
+        let conf = Number(g?.confidence);
+        if (isNaN(conf) || conf < 0) conf = 0.50;
+        if (conf > 1) conf = conf / 100;
+        sanitizedGuesses.push({
+          category: cat as WasteCategory,
+          confidence: Math.round(conf * 100) / 100
+        });
+      }
+
+      // If missing primary guess, construct from parsed fields
+      if (sanitizedGuesses.length === 0) {
+        let primaryCat = String(parsed.category || 'not_waste_or_unclear').toLowerCase().trim();
+        if (!validCategories.includes(primaryCat as WasteCategory)) {
+          primaryCat = 'not_waste_or_unclear';
+        }
+        let conf = Number(parsed.confidence) || 0.50;
+        if (conf > 1) conf = conf / 100;
+        sanitizedGuesses.push({
+          category: primaryCat as WasteCategory,
+          confidence: Math.round(conf * 100) / 100
+        });
+      }
+
+      // If missing secondary guess, add a plausible runner-up
+      if (sanitizedGuesses.length === 1) {
+        const topCat = sanitizedGuesses[0].category;
+        const fallbackCat = topCat === 'not_waste_or_unclear' ? 'plastic' : 'not_waste_or_unclear';
+        const secondConf = Math.max(0.05, Math.round((1 - sanitizedGuesses[0].confidence) * 100) / 100);
+        sanitizedGuesses.push({
+          category: fallbackCat as WasteCategory,
+          confidence: secondConf
+        });
+      }
+
+      const primaryGuess = sanitizedGuesses[0];
+      const category: WasteCategory = primaryGuess.category;
+      const confidence = primaryGuess.confidence;
+
+      // Check declaredMatch strictly against objective result
+      const normalizedDeclared = cleanDeclared.toLowerCase().replace(/[- ]/g, '_');
+      const normalizedResult = category.toLowerCase().replace(/[- ]/g, '_');
+      const declaredMatch = Boolean(
+        cleanDeclared && 
+        normalizedDeclared !== 'not_waste_or_unclear' &&
+        (normalizedDeclared === normalizedResult || 
+         (normalizedDeclared === 'dry_recyclable' && ['paper_cardboard', 'plastic', 'metal'].includes(normalizedResult)) ||
+         (normalizedDeclared === 'biodegradable' && normalizedResult === 'organic'))
+      );
+
+      const isRecyclable = category !== 'not_waste_or_unclear' && category !== 'hazardous';
+
+      return res.json({
+        success: true,
+        source: 'Gemini',
+        isRealAi: true,
+        isEstimate: false,
+        analysis: {
+          mainObjectDescription: String(parsed.mainObjectDescription || ''),
+          materialDescription: String(parsed.materialDescription || ''),
+          detectedItem: String(parsed.detectedItem || (category === 'not_waste_or_unclear' ? 'Unidentified or non-waste object' : 'Inspected waste material')),
+          category,
+          condition: String(parsed.condition || (category === 'not_waste_or_unclear' ? 'Non-waste / Unclear' : 'Segregated')),
+          confidence: Math.round(confidence * 100) / 100,
+          topGuesses: sanitizedGuesses,
+          estimatedWeightKg: category === 'not_waste_or_unclear' ? 0 : Number(parsed.estimatedWeightKg || 1.0),
+          isRecyclable,
+          recyclabilityGrade: category === 'not_waste_or_unclear' ? 'N/A' : String(parsed.recyclabilityGrade || 'Grade B'),
+          disposalGuideline: String(parsed.disposalGuideline || (category === 'not_waste_or_unclear' ? 'Item is not discarded waste or photo is unclear. Please provide a clear photo of waste.' : 'Route to authorized municipal recycling facility.')),
+          declaredMatch
+        }
+      });
+    } catch (geminiErr: any) {
+      console.warn('Gemini vision analysis failed:', geminiErr?.message || geminiErr);
+      // Return error state without falling back to sample items or guesses
+      return res.status(503).json({
+        success: false,
+        source: 'Unavailable',
+        isRealAi: false,
+        error: 'AI unavailable. Please choose the category manually and let the agent verify.'
+      });
     }
   });
 

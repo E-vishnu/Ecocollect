@@ -52,6 +52,7 @@ import { RazorpayModal } from './RazorpayModal';
 import { WasteCategorySelector } from './WasteCategorySelector';
 import { EnvironmentalImpactCard } from './EnvironmentalImpactCard';
 import { NotificationDrawer } from './NotificationDrawer';
+import { WasteCameraModal } from './WasteCameraModal';
 
 export type ResidentNavTab = 'home' | 'book' | 'pickups' | 'wallet' | 'points' | 'impact' | 'profile';
 
@@ -129,10 +130,11 @@ export const ResidentAppSimulator: React.FC<ResidentAppSimulatorProps> = ({
     confirmed: true
   });
 
-  // Settlement Modal State
+  // Settlement & Scanner Modal State
   const [settlementPickup, setSettlementPickup] = useState<Pickup | null>(null);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isWardScheduleModalOpen, setIsWardScheduleModalOpen] = useState(false);
+  const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
 
   // Notifications State
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
@@ -219,6 +221,46 @@ export const ResidentAppSimulator: React.FC<ResidentAppSimulatorProps> = ({
   const handleConfirmAiDetection = () => {
     setSelectedCategory(aiDetectionResult.category);
     setAiDetectionResult(prev => ({ ...prev, confirmed: true }));
+  };
+
+  const handleApplyCameraAnalysis = (category: WasteCategory, details: {
+    detectedItem: string;
+    estimatedWeightKg: number;
+    photoUrl?: string;
+    condition?: string;
+    confidence?: number;
+    topGuesses?: any[];
+    userCorrection?: {
+      originalCategory: WasteCategory;
+      correctedCategory: WasteCategory;
+      timestamp: string;
+    };
+  }) => {
+    if (category === 'not_waste_or_unclear') {
+      return;
+    }
+    handleSelectCategory(category);
+    if (details.estimatedWeightKg && details.estimatedWeightKg > 0) {
+      setEstWeight(details.estimatedWeightKg);
+    }
+    if (details.condition || details.userCorrection) {
+      setCategoryDetails(prev => ({
+        ...prev,
+        cleanliness: details.condition || (prev as any).cleanliness,
+        specialNotes: details.userCorrection 
+          ? `[AI Correction]: User corrected from ${details.userCorrection.originalCategory} to ${details.userCorrection.correctedCategory}`
+          : (prev as any).specialNotes
+      }));
+    }
+    setAiDetectionResult({
+      detectedItem: details.detectedItem,
+      category: category,
+      confidence: details.confidence || 90,
+      confirmed: true
+    });
+    // Switch to book tab and advance to step 2 so user can review details
+    handleTabSwitch('book');
+    setBookingStep(2);
   };
 
   const handleRedeemReward = (reward: { title: string; cost: number }) => {
@@ -393,6 +435,16 @@ export const ResidentAppSimulator: React.FC<ResidentAppSimulatorProps> = ({
                   <ArrowRight className="w-4 h-4" />
                 </button>
                 <button
+                  id="home-scan-waste-btn"
+                  onClick={() => setIsCameraModalOpen(true)}
+                  className="px-5 py-3.5 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs flex items-center gap-2 shadow-sm transition-all cursor-pointer border border-emerald-500/40"
+                  title="Scan Waste with AI Camera"
+                >
+                  <Camera className="w-4 h-4 text-emerald-400" />
+                  <span>{t('resident.scanWasteBtn', 'Scan Waste (AI)')}</span>
+                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                </button>
+                <button
                   id="home-secondary-pickups-btn"
                   onClick={() => handleTabSwitch('pickups')}
                   className="px-5 py-3.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs flex items-center gap-2 transition-all cursor-pointer"
@@ -412,6 +464,34 @@ export const ResidentAppSimulator: React.FC<ResidentAppSimulatorProps> = ({
             </div>
 
             <div className="absolute -right-8 -bottom-8 w-60 h-60 rounded-full bg-emerald-500/10 pointer-events-none"></div>
+          </div>
+
+          {/* AI Waste Camera Scanner Feature Banner */}
+          <div className="bg-gradient-to-r from-emerald-950 via-slate-900 to-teal-950 text-white rounded-3xl p-6 border border-emerald-800/40 shadow-md relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1.5 max-w-xl">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                  <Sparkles className="w-3 h-3 text-amber-300" />
+                  AI Waste Camera Scanner
+                </span>
+                <span className="text-[11px] text-slate-300">Instant Material & Buyback Check</span>
+              </div>
+              <h3 className="text-base sm:text-lg font-black text-white">
+                {t('resident.scanWasteCardTitle', 'Unsure how to segregate or what your recyclables are worth?')}
+              </h3>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                {t('resident.scanWasteCardSubtitle', 'Use your camera or upload a photo to identify plastic, paper, metal, e-waste, or hazardous scrap. Get instant recyclability status, segregation guidelines, and auto-route to verified recyclers.')}
+              </p>
+            </div>
+            <button
+              id="home-callout-scan-btn"
+              type="button"
+              onClick={() => setIsCameraModalOpen(true)}
+              className="shrink-0 px-6 py-3.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer"
+            >
+              <Camera className="w-4 h-4 text-slate-950" />
+              <span>{t('resident.launchScannerBtn', 'Scan Waste with Camera')}</span>
+            </button>
           </div>
 
           {/* CRITICAL SERVICE SEPARATION: Regular Municipal vs EcoCollect On-Demand Pickup */}
@@ -766,6 +846,32 @@ export const ResidentAppSimulator: React.FC<ResidentAppSimulatorProps> = ({
           {/* STEP 1: Waste Type Selection */}
           {bookingStep === 1 && (
             <div className="space-y-6">
+              {/* AI Camera Assist Banner */}
+              <div className="p-4 rounded-2xl bg-slate-900 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-slate-800 shadow-xs">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-500 text-slate-950 flex items-center justify-center font-bold shrink-0">
+                    <Camera className="w-5 h-5 text-slate-950" />
+                  </div>
+                  <div>
+                    <span className="text-xs font-bold text-white block">
+                      {t('resident.aiCameraAssistTitle', 'Unsure which waste category to pick?')}
+                    </span>
+                    <p className="text-[11px] text-slate-400">
+                      {t('resident.aiCameraAssistDesc', 'Scan your waste item using your camera or gallery to auto-detect category, recyclability, and buyback value.')}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  id="book-step1-scan-waste-btn"
+                  type="button"
+                  onClick={() => setIsCameraModalOpen(true)}
+                  className="shrink-0 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                  <span>{t('resident.scanWasteBtn', 'Scan Waste with Camera')}</span>
+                </button>
+              </div>
+
               <WasteCategorySelector
                 selectedCategory={selectedCategory}
                 onSelectCategory={handleSelectCategory}
@@ -871,9 +977,20 @@ export const ResidentAppSimulator: React.FC<ResidentAppSimulatorProps> = ({
                     </div>
                   </div>
 
-                  <span className="text-[10px] font-mono bg-slate-800 text-slate-300 px-2 py-1 rounded-lg border border-slate-700">
-                    {t('resident.smartVisionAssistant', 'Smart Vision Assistant')}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      id="book-step2-scan-real-waste-btn"
+                      type="button"
+                      onClick={() => setIsCameraModalOpen(true)}
+                      className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                    >
+                      <Camera className="w-3.5 h-3.5" />
+                      <span>{t('resident.scanRealWasteBtn', 'Scan Real Waste')}</span>
+                    </button>
+                    <span className="text-[10px] font-mono bg-slate-800 text-slate-300 px-2 py-1 rounded-lg border border-slate-700 hidden sm:inline-block">
+                      {t('resident.smartVisionAssistant', 'Smart Vision Assistant')}
+                    </span>
+                  </div>
                 </div>
 
                 {/* Sample Photo Thumbnails */}
@@ -1962,6 +2079,14 @@ export const ResidentAppSimulator: React.FC<ResidentAppSimulatorProps> = ({
           </div>
         </div>
       )}
+
+      {/* AI Waste Camera Scanner Modal */}
+      <WasteCameraModal
+        isOpen={isCameraModalOpen}
+        onClose={() => setIsCameraModalOpen(false)}
+        onApplyCategory={handleApplyCameraAnalysis}
+        initialCategory={selectedCategory}
+      />
 
     </div>
   );
