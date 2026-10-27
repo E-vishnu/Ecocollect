@@ -18,7 +18,7 @@ import {
 } from './src/data/pricingConstants';
 import { User, Pickup, WeightLog, AppNotification, WasteCategory, PickupStatus } from './src/types';
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'ecocollect_jwt_secret_2026_super_secure';
 
 // Initial passwords for development/demo accounts (securely hashed with bcrypt)
