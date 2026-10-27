@@ -86,9 +86,9 @@ interface WasteCameraModalProps {
 
 /**
  * Client-side image compression & downscaling helper
- * Resizes image to maxDimension (default 1280px) and compresses to JPEG
+ * Resizes image to maximum 1024px on the longest side and compresses to JPEG quality 0.7
  */
-export async function compressAndResizeImage(file: File, maxDimension = 1280, quality = 0.82): Promise<string> {
+export async function compressAndResizeImage(file: File, maxDimension = 1024, quality = 0.7): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (readerEvent) => {
@@ -155,6 +155,10 @@ export const WasteCameraModal: React.FC<WasteCameraModalProps> = ({
   const [analysisResult, setAnalysisResult] = useState<WasteAnalysisResult | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // Live status text and elapsed seconds for fast scan feedback
+  const [scanStatusText, setScanStatusText] = useState<'Waking server…' | 'Analyzing…' | 'Trying backup model…'>('Waking server…');
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
   // Active / Confirmed Category for booking & user corrections
   const [confirmedCategory, setConfirmedCategory] = useState<WasteCategory | null>(null);
   const [isUserConfirmed, setIsUserConfirmed] = useState(false);
@@ -183,6 +187,8 @@ export const WasteCameraModal: React.FC<WasteCameraModalProps> = ({
       setAnalysisResult(null);
       setErrorMessage(null);
       setIsAnalyzing(false);
+      setScanStatusText('Waking server…');
+      setElapsedSeconds(0);
       setConfirmedCategory(null);
       setIsUserConfirmed(false);
       setShowCorrectionPicker(false);
@@ -247,18 +253,30 @@ export const WasteCameraModal: React.FC<WasteCameraModalProps> = ({
     }
   };
 
-  // Capture frame from live video stream
+  // Capture frame from live video stream (resized to max 1024px, JPEG quality 0.7)
   const captureLiveFrame = () => {
     if (!videoRef.current) return;
     try {
       const video = videoRef.current;
+      let width = video.videoWidth || 640;
+      let height = video.videoHeight || 480;
+      const maxDim = 1024;
+      if (width > maxDim || height > maxDim) {
+        if (width > height) {
+          height = Math.round((height * maxDim) / width);
+          width = maxDim;
+        } else {
+          width = Math.round((width * maxDim) / height);
+          height = maxDim;
+        }
+      }
       const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
+      canvas.width = width;
+      canvas.height = height;
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      ctx.drawImage(video, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
       setImagePreview(dataUrl);
       stopLiveStream();
     } catch (err) {
@@ -266,18 +284,42 @@ export const WasteCameraModal: React.FC<WasteCameraModalProps> = ({
     }
   };
 
-  // Send image to backend for AI analysis
+  // Send image to backend for AI analysis with live status, 15-second timeout & instant model fallback
   const handleAnalyzeWaste = async () => {
     if (!imagePreview) return;
 
     setIsAnalyzing(true);
     setErrorMessage(null);
+    setElapsedSeconds(0);
+    setScanStatusText('Waking server…');
+
+    const startTime = Date.now();
+    const intervalId = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      setElapsedSeconds(elapsed);
+      if (elapsed < 2) {
+        setScanStatusText('Waking server…');
+      } else if (elapsed < 5) {
+        setScanStatusText('Analyzing…');
+      } else {
+        setScanStatusText('Trying backup model…');
+      }
+    }, 250);
+
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => {
+      console.warn('[AI Scanner] 15-second timeout reached, aborting request.');
+      abortController.abort();
+    }, 15000);
 
     try {
-      const response = await apiService.analyzeWasteWithAI({
-        imageBase64: imagePreview,
-        declaredCategory: initialCategory
-      });
+      const response = await apiService.analyzeWasteWithAI(
+        {
+          imageBase64: imagePreview,
+          declaredCategory: initialCategory
+        },
+        abortController.signal
+      );
 
       if (!response || !response.success || !response.analysis) {
         setAnalysisResult(null);
@@ -332,10 +374,12 @@ export const WasteCameraModal: React.FC<WasteCameraModalProps> = ({
       setShowCorrectionPicker(false);
       setUserCorrection(null);
     } catch (err: any) {
-      console.error('AI Analysis failed:', err);
+      console.error('AI Analysis failed or timed out:', err);
       setAnalysisResult(null);
       setErrorMessage('AI unavailable. Please choose the category manually and let the agent verify.');
     } finally {
+      clearInterval(intervalId);
+      clearTimeout(timeoutId);
       setIsAnalyzing(false);
     }
   };
@@ -349,6 +393,8 @@ export const WasteCameraModal: React.FC<WasteCameraModalProps> = ({
     setIsUserConfirmed(false);
     setShowCorrectionPicker(false);
     setUserCorrection(null);
+    setScanStatusText('Waking server…');
+    setElapsedSeconds(0);
     // trigger camera directly
     if (cameraInputRef.current) {
       cameraInputRef.current.click();
@@ -656,15 +702,18 @@ export const WasteCameraModal: React.FC<WasteCameraModalProps> = ({
 
                 {/* Scanning Beam Overlay during analysis */}
                 {isAnalyzing && (
-                  <div className="absolute inset-0 bg-emerald-950/40 backdrop-blur-2xs flex flex-col items-center justify-center gap-3">
+                  <div className="absolute inset-0 bg-emerald-950/60 backdrop-blur-xs flex flex-col items-center justify-center gap-3">
                     <div className="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-lg animate-bounce">
                       <RefreshCw className="w-6 h-6 animate-spin" />
                     </div>
                     <div className="text-center px-4">
-                      <span className="text-xs font-black text-emerald-300 block">
-                        {t('scanner.analyzingTitle', 'Analyzing Waste Material...')}
-                      </span>
-                      <span className="text-[11px] text-slate-200 mt-0.5 block">
+                      <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-slate-950/85 border border-emerald-400/40 text-emerald-300 font-mono text-xs font-bold shadow-lg">
+                        <span className="animate-pulse">{scanStatusText}</span>
+                        <span className="text-emerald-400 font-extrabold bg-emerald-950/80 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                          {elapsedSeconds}s
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-slate-300 mt-2 block font-medium">
                         {t('scanner.analyzingSubtitle', 'Inspecting texture, recyclability grade & composition')}
                       </span>
                     </div>
@@ -679,6 +728,29 @@ export const WasteCameraModal: React.FC<WasteCameraModalProps> = ({
                   </div>
                 )}
               </div>
+
+              {/* Live Status indicator during analysis */}
+              {isAnalyzing && (
+                <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <RefreshCw className="w-5 h-5 text-emerald-600 animate-spin shrink-0" />
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-black text-slate-900">{scanStatusText}</span>
+                        <span className="text-xs font-mono font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-300">
+                          {elapsedSeconds}s
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-slate-500 block mt-0.5">
+                        {elapsedSeconds < 2 ? 'Waking server and preparing vision request...' : elapsedSeconds < 5 ? 'Analyzing image material & composition...' : 'Switching to backup vision model...'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-[10px] font-mono text-slate-400 font-bold px-2 py-1 bg-white rounded-lg border border-slate-200">
+                    Max: 15s
+                  </div>
+                </div>
+              )}
 
               {/* Action Buttons for Preview (Before Analysis) */}
               {!analysisResult && !isAnalyzing && (

@@ -92,11 +92,14 @@ export const apiService = {
   },
 
   // AI MULTI-WASTE CLASSIFIER (Multimodal Server-side Gemini)
-  async analyzeWasteWithAI(payload: {
-    imageBase64?: string;
-    imageUrl?: string;
-    declaredCategory?: WasteCategory;
-  }): Promise<{
+  async analyzeWasteWithAI(
+    payload: {
+      imageBase64?: string;
+      imageUrl?: string;
+      declaredCategory?: WasteCategory;
+    },
+    signal?: AbortSignal
+  ): Promise<{
     success: boolean;
     source: string;
     isRealAi?: boolean;
@@ -121,7 +124,8 @@ export const apiService = {
       const res = await fetch('/api/verification/ai-analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data || !data.success) {
@@ -134,7 +138,7 @@ export const apiService = {
       }
       return data;
     } catch (e: any) {
-      console.warn('API analyzeWasteWithAI error:', e);
+      console.warn('API analyzeWasteWithAI error:', e?.name || e);
       return {
         success: false,
         source: 'Unavailable',

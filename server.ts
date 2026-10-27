@@ -705,59 +705,46 @@ CRITICAL CLASSIFICATION INSTRUCTIONS:
       };
 
       const startTime = Date.now();
-      const TOTAL_TIMEOUT_MS = 20000; // 20-second total deadline
+      const TOTAL_TIMEOUT_MS = 15000; // 15-second total deadline
       let responseText: string | null = null;
       let successfulModel = '';
       let lastError: any = null;
 
       modelLoop: for (const modelName of VISION_MODELS) {
-        // Try each model, retrying once after 1 second on error (503, 429, etc.)
-        for (let attempt = 1; attempt <= 2; attempt++) {
-          const elapsed = Date.now() - startTime;
-          const remainingTime = TOTAL_TIMEOUT_MS - elapsed;
-          if (remainingTime <= 0) {
-            console.warn(`[AI Vision] Total 20-second timeout reached before trying ${modelName} (attempt ${attempt}).`);
+        const elapsed = Date.now() - startTime;
+        const remainingTime = TOTAL_TIMEOUT_MS - elapsed;
+        if (remainingTime <= 0) {
+          console.warn(`[AI Vision] Total 15-second timeout reached before trying ${modelName}.`);
+          break modelLoop;
+        }
+
+        try {
+          console.log(`[AI Vision] Querying model '${modelName}' (elapsed: ${Math.round(elapsed / 1000)}s)...`);
+          const response = await ai.models.generateContent({
+            model: modelName,
+            contents,
+            config: genConfig
+          });
+
+          if (response.text) {
+            responseText = response.text;
+            successfulModel = modelName;
+            console.log(`[AI Vision] Model '${modelName}' answered successfully in ${Date.now() - startTime}ms.`);
             break modelLoop;
+          } else {
+            throw new Error(`Empty response text returned from ${modelName}`);
           }
-
-          try {
-            console.log(`[AI Vision] Querying model '${modelName}' (attempt ${attempt}/2, remaining: ${Math.round(remainingTime / 1000)}s)...`);
-            const response = await ai.models.generateContent({
-              model: modelName,
-              contents,
-              config: genConfig
-            });
-
-            if (response.text) {
-              responseText = response.text;
-              successfulModel = modelName;
-              console.log(`[AI Vision] Model '${modelName}' answered successfully on attempt ${attempt}.`);
-              break modelLoop;
-            } else {
-              throw new Error(`Empty response text returned from ${modelName}`);
-            }
-          } catch (err: any) {
-            lastError = err;
-            const errMsg = err?.message || String(err);
-            console.warn(`[AI Vision] Model '${modelName}' failed on attempt ${attempt}:`, errMsg);
-
-            // Retry each model once after 1 second if time permits
-            if (attempt === 1) {
-              const timeBeforeRetry = TOTAL_TIMEOUT_MS - (Date.now() - startTime);
-              if (timeBeforeRetry > 1100) {
-                console.log(`[AI Vision] Waiting 1 second before retrying '${modelName}'...`);
-                await new Promise(resolve => setTimeout(resolve, 1000));
-              } else {
-                console.warn(`[AI Vision] Not enough time left (${timeBeforeRetry}ms) for 1s retry on '${modelName}', falling back...`);
-                break;
-              }
-            }
-          }
+        } catch (err: any) {
+          lastError = err;
+          const errMsg = err?.message || String(err);
+          console.warn(`[AI Vision] Model '${modelName}' encountered error, immediately moving to next model:`, errMsg);
+          // On a 503, 429 or any error, move straight to the next model with no long waits
+          continue modelLoop;
         }
       }
 
       if (!responseText) {
-        throw lastError || new Error('All vision models failed or timed out after 20 seconds');
+        throw lastError || new Error('All vision models failed or timed out after 15 seconds');
       }
 
       const parsed = JSON.parse(responseText);
