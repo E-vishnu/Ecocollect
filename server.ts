@@ -628,7 +628,7 @@ CRITICAL CLASSIFICATION INSTRUCTIONS:
 
       // Model fallback chain: primary stable flash model + 2 fallback vision models
       const VISION_MODELS = [
-        'gemini-2.5-latest',  // Primary stable non-preview flash vision model
+        'gemini-2.5-flash',  // Primary stable non-preview flash vision model
         'gemini-1.5-flash',     // Reliable Fallback model
       ];
 
