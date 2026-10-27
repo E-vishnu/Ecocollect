@@ -626,86 +626,141 @@ CRITICAL CLASSIFICATION INSTRUCTIONS:
 7. The user declared: "${cleanDeclared || 'none'}". Do NOT let this influence your identification. Determine your answer strictly from visible evidence first, and only afterward compare against it to set "declaredMatch".`
       });
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents,
-        config: {
-          temperature: 0.1,
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              mainObjectDescription: {
-                type: Type.STRING,
-                description: 'Detailed description of the main visible object in the image.'
-              },
-              materialDescription: {
-                type: Type.STRING,
-                description: 'Identified material composition of the object from visual evidence.'
-              },
-              detectedItem: {
-                type: Type.STRING,
-                description: 'Specific name of the object. If working electronic device, state that clearly.'
-              },
-              topGuesses: {
-                type: Type.ARRAY,
-                description: 'The top 2 category guesses ranked by confidence.',
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    category: {
-                      type: Type.STRING,
-                      description: 'Must be one of: organic, plastic, paper_cardboard, glass, metal, e_waste, textile, hazardous, not_waste_or_unclear'
-                    },
-                    confidence: {
-                      type: Type.NUMBER,
-                      description: 'Confidence score between 0.00 and 1.00 for this category.'
-                    }
+      // Model fallback chain: primary stable flash model + 2 fallback vision models
+      const VISION_MODELS = [
+        'gemini-flash-latest',  // Primary stable non-preview flash vision model
+        'gemini-3.8-flash',     // Fallback 1
+        'gemini-3.1-flash-lite' // Fallback 2
+      ];
+
+      const genConfig: any = {
+        temperature: 0.1,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            mainObjectDescription: {
+              type: Type.STRING,
+              description: 'Detailed description of the main visible object in the image.'
+            },
+            materialDescription: {
+              type: Type.STRING,
+              description: 'Identified material composition of the object from visual evidence.'
+            },
+            detectedItem: {
+              type: Type.STRING,
+              description: 'Specific name of the object. If working electronic device, state that clearly.'
+            },
+            topGuesses: {
+              type: Type.ARRAY,
+              description: 'The top 2 category guesses ranked by confidence.',
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  category: {
+                    type: Type.STRING,
+                    description: 'Must be one of: organic, plastic, paper_cardboard, glass, metal, e_waste, textile, hazardous, not_waste_or_unclear'
                   },
-                  required: ['category', 'confidence']
-                }
-              },
-              condition: {
-                type: Type.STRING,
-                description: 'Physical condition (e.g. Clean & dry, Soiled, Scrap, Broken, Working device, Blurry/Dark).'
-              },
-              estimatedWeightKg: {
-                type: Type.NUMBER,
-                description: 'Estimated weight in kg (0 for not_waste_or_unclear).'
-              },
-              recyclabilityGrade: {
-                type: Type.STRING,
-                description: 'Grade A, Grade B, Grade C, Non-Recyclable, or N/A.'
-              },
-              disposalGuideline: {
-                type: Type.STRING,
-                description: '1-2 sentence guideline for proper segregation or disposal.'
-              },
-              declaredMatch: {
-                type: Type.BOOLEAN,
-                description: 'Whether the top identified category matches the user declared category.'
+                  confidence: {
+                    type: Type.NUMBER,
+                    description: 'Confidence score between 0.00 and 1.00 for this category.'
+                  }
+                },
+                required: ['category', 'confidence']
               }
             },
-            required: [
-              'mainObjectDescription',
-              'materialDescription',
-              'detectedItem',
-              'topGuesses',
-              'condition',
-              'estimatedWeightKg',
-              'recyclabilityGrade',
-              'disposalGuideline',
-              'declaredMatch'
-            ]
+            condition: {
+              type: Type.STRING,
+              description: 'Physical condition (e.g. Clean & dry, Soiled, Scrap, Broken, Working device, Blurry/Dark).'
+            },
+            estimatedWeightKg: {
+              type: Type.NUMBER,
+              description: 'Estimated weight in kg (0 for not_waste_or_unclear).'
+            },
+            recyclabilityGrade: {
+              type: Type.STRING,
+              description: 'Grade A, Grade B, Grade C, Non-Recyclable, or N/A.'
+            },
+            disposalGuideline: {
+              type: Type.STRING,
+              description: '1-2 sentence guideline for proper segregation or disposal.'
+            },
+            declaredMatch: {
+              type: Type.BOOLEAN,
+              description: 'Whether the top identified category matches the user declared category.'
+            }
+          },
+          required: [
+            'mainObjectDescription',
+            'materialDescription',
+            'detectedItem',
+            'topGuesses',
+            'condition',
+            'estimatedWeightKg',
+            'recyclabilityGrade',
+            'disposalGuideline',
+            'declaredMatch'
+          ]
+        }
+      };
+
+      const startTime = Date.now();
+      const TOTAL_TIMEOUT_MS = 20000; // 20-second total deadline
+      let responseText: string | null = null;
+      let successfulModel = '';
+      let lastError: any = null;
+
+      modelLoop: for (const modelName of VISION_MODELS) {
+        // Try each model, retrying once after 1 second on error (503, 429, etc.)
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          const elapsed = Date.now() - startTime;
+          const remainingTime = TOTAL_TIMEOUT_MS - elapsed;
+          if (remainingTime <= 0) {
+            console.warn(`[AI Vision] Total 20-second timeout reached before trying ${modelName} (attempt ${attempt}).`);
+            break modelLoop;
+          }
+
+          try {
+            console.log(`[AI Vision] Querying model '${modelName}' (attempt ${attempt}/2, remaining: ${Math.round(remainingTime / 1000)}s)...`);
+            const response = await ai.models.generateContent({
+              model: modelName,
+              contents,
+              config: genConfig
+            });
+
+            if (response.text) {
+              responseText = response.text;
+              successfulModel = modelName;
+              console.log(`[AI Vision] Model '${modelName}' answered successfully on attempt ${attempt}.`);
+              break modelLoop;
+            } else {
+              throw new Error(`Empty response text returned from ${modelName}`);
+            }
+          } catch (err: any) {
+            lastError = err;
+            const errMsg = err?.message || String(err);
+            console.warn(`[AI Vision] Model '${modelName}' failed on attempt ${attempt}:`, errMsg);
+
+            // Retry each model once after 1 second if time permits
+            if (attempt === 1) {
+              const timeBeforeRetry = TOTAL_TIMEOUT_MS - (Date.now() - startTime);
+              if (timeBeforeRetry > 1100) {
+                console.log(`[AI Vision] Waiting 1 second before retrying '${modelName}'...`);
+                await new Promise(resolve => setTimeout(resolve, 1000));
+              } else {
+                console.warn(`[AI Vision] Not enough time left (${timeBeforeRetry}ms) for 1s retry on '${modelName}', falling back...`);
+                break;
+              }
+            }
           }
         }
-      });
-
-      if (!response.text) {
-        throw new Error('Empty response from AI vision service');
       }
 
-      const parsed = JSON.parse(response.text);
+      if (!responseText) {
+        throw lastError || new Error('All vision models failed or timed out after 20 seconds');
+      }
+
+      const parsed = JSON.parse(responseText);
 
       // Allowed categories only
       const validCategories: WasteCategory[] = [
@@ -783,7 +838,8 @@ CRITICAL CLASSIFICATION INSTRUCTIONS:
 
       return res.json({
         success: true,
-        source: 'Gemini',
+        source: `Gemini (${successfulModel})`,
+        modelUsed: successfulModel,
         isRealAi: true,
         isEstimate: false,
         analysis: {
