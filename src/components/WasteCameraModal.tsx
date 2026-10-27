@@ -306,20 +306,11 @@ export const WasteCameraModal: React.FC<WasteCameraModalProps> = ({
       }
     }, 250);
 
-    const abortController = new AbortController();
-    const timeoutId = setTimeout(() => {
-      console.warn('[AI Scanner] 15-second timeout reached, aborting request.');
-      abortController.abort();
-    }, 15000);
-
     try {
-      const response = await apiService.analyzeWasteWithAI(
-        {
-          imageBase64: imagePreview,
-          declaredCategory: initialCategory
-        },
-        abortController.signal
-      );
+      const response = await apiService.analyzeWasteWithAI({
+        imageBase64: imagePreview,
+        declaredCategory: initialCategory
+      });
 
       if (!response || !response.success || !response.analysis) {
         setAnalysisResult(null);
@@ -374,12 +365,11 @@ export const WasteCameraModal: React.FC<WasteCameraModalProps> = ({
       setShowCorrectionPicker(false);
       setUserCorrection(null);
     } catch (err: any) {
-      console.error('AI Analysis failed or timed out:', err);
+      console.error('AI Analysis failed:', err);
       setAnalysisResult(null);
       setErrorMessage('AI unavailable. Please choose the category manually and let the agent verify.');
     } finally {
       clearInterval(intervalId);
-      clearTimeout(timeoutId);
       setIsAnalyzing(false);
     }
   };
@@ -746,8 +736,9 @@ export const WasteCameraModal: React.FC<WasteCameraModalProps> = ({
                       </span>
                     </div>
                   </div>
-                  <div className="text-[10px] font-mono text-slate-400 font-bold px-2 py-1 bg-white rounded-lg border border-slate-200">
-                    Max: 15s
+                  <div className="text-[10px] font-mono text-emerald-700 font-bold px-2.5 py-1 bg-emerald-100/70 rounded-lg border border-emerald-300 flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span>Live Scan</span>
                   </div>
                 </div>
               )}

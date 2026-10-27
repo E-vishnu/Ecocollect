@@ -626,10 +626,11 @@ CRITICAL CLASSIFICATION INSTRUCTIONS:
 7. The user declared: "${cleanDeclared || 'none'}". Do NOT let this influence your identification. Determine your answer strictly from visible evidence first, and only afterward compare against it to set "declaredMatch".`
       });
 
-      // Model fallback chain: primary stable flash model + 2 fallback vision models
+      // Model fallback chain: primary stable Gemini Flash vision model + 2 fallback models
       const VISION_MODELS = [
-        'gemini-2.5-flash',  // Primary stable non-preview flash vision model
-        'gemini-1.5-flash',     // Fallback 1 
+        'gemini-flash-latest',  // Primary Gemini Flash vision model (stable, non-preview)
+        'gemini-3.8-flash',     // Fallback model 1
+        'gemini-3.1-flash-lite' // Fallback model 2
       ];
 
       const genConfig: any = {
@@ -704,18 +705,12 @@ CRITICAL CLASSIFICATION INSTRUCTIONS:
       };
 
       const startTime = Date.now();
-      const TOTAL_TIMEOUT_MS = 15000; // 15-second total deadline
       let responseText: string | null = null;
       let successfulModel = '';
       let lastError: any = null;
 
       modelLoop: for (const modelName of VISION_MODELS) {
         const elapsed = Date.now() - startTime;
-        const remainingTime = TOTAL_TIMEOUT_MS - elapsed;
-        if (remainingTime <= 0) {
-          console.warn(`[AI Vision] Total 15-second timeout reached before trying ${modelName}.`);
-          break modelLoop;
-        }
 
         try {
           console.log(`[AI Vision] Querying model '${modelName}' (elapsed: ${Math.round(elapsed / 1000)}s)...`);
@@ -737,13 +732,13 @@ CRITICAL CLASSIFICATION INSTRUCTIONS:
           lastError = err;
           const errMsg = err?.message || String(err);
           console.warn(`[AI Vision] Model '${modelName}' encountered error, immediately moving to next model:`, errMsg);
-          // On a 503, 429 or any error, move straight to the next model with no long waits
+          // On a 503, 429 or retryable error, move straight to the next model with no long waits
           continue modelLoop;
         }
       }
 
       if (!responseText) {
-        throw lastError || new Error('All vision models failed or timed out after 15 seconds');
+        throw lastError || new Error('All configured vision models failed to classify the image');
       }
 
       const parsed = JSON.parse(responseText);
